@@ -85,6 +85,21 @@ function Open-SnEditor([string]$Path) {
     & $parts[0] @editorArgs $Path
 }
 
+$SnCommands = [ordered]@{
+    new  = 'sn new <名稱>    建立並編輯（已存在則直接編輯），例如 sn new git/squash'
+    grep = 'sn grep <regex>  全文搜尋內容，再從符合的檔案中挑選'
+    dir  = 'sn dir           印出資料夾路徑，例如 cd (sn dir)'
+    help = 'sn help          顯示本說明'
+}
+
+function Show-SnHelp {
+    Write-Host 'sn [關鍵字...]    fzf 挑選（比對名稱、tags、desc）；只有一筆符合時直接複製'
+    foreach ($v in $SnCommands.Values) { Write-Host $v }
+    Write-Host ''
+    Write-Host '挑選畫面：Enter 複製第一個 code block · Ctrl-E 編輯 · Ctrl-O 印到 stdout'
+    Write-Host '指令與 sn new 的名稱都可以按 Tab 補全；Ctrl+Space 列出全部選項'
+}
+
 function sn {
     <#
     .SYNOPSIS
@@ -98,14 +113,20 @@ function sn {
         挑選畫面：Enter 複製第一個 code block、Ctrl-E 編輯、Ctrl-O 印到 stdout（可接管線）。
         編輯器依序取 $env:SN_EDITOR、$env:EDITOR，都沒有時用 nvim。
     #>
+    # 具名參數只是為了讓 Tab 補全有地方掛；不是子指令時兩者合起來就是 fzf 的關鍵字。
+    param(
+        [Parameter(Position = 0)][string]$Command,
+        [Parameter(Position = 1, ValueFromRemainingArguments = $true)][string[]]$Rest
+    )
     $dir = Get-SnDir
-    $cmd = if ($args.Count) { [string]$args[0] } else { '' }
-    $rest = (@($args | Select-Object -Skip 1) -join ' ').Trim()
+    $cmd = $Command
+    $restText = (@($Rest) -join ' ').Trim()
 
     switch ($cmd) {
+        'help' { Show-SnHelp; return }
         'dir' { return $dir }
         'new' {
-            $name = ($rest -replace '\\', '/') -replace '\.md$', ''
+            $name = ($restText -replace '\\', '/') -replace '\.md$', ''
             if (-not $name) { Write-Error '用法：sn new <名稱>，例如 sn new git/squash'; return }
             if ([IO.Path]::IsPathRooted($name) -or ($name -split '/') -contains '..') {
                 Write-Error "名稱必須是資料夾內的相對路徑：$name"; return
@@ -129,15 +150,15 @@ desc:
             return
         }
         'grep' {
-            if (-not $rest) { Write-Error '用法：sn grep <regex>'; return }
-            $files = @(Invoke-SnUtf8 { rg --files-with-matches --ignore-case --glob '*.md' -- $rest $dir } | Sort-Object)
-            if (-not $files.Count) { Write-Host "沒有內容符合：$rest"; return }
+            if (-not $restText) { Write-Error '用法：sn grep <regex>'; return }
+            $files = @(Invoke-SnUtf8 { rg --files-with-matches --ignore-case --glob '*.md' -- $restText $dir } | Sort-Object)
+            if (-not $files.Count) { Write-Host "沒有內容符合：$restText"; return }
             $query = ''
         }
         default {
             $files = @([IO.Directory]::GetFiles($dir, '*.md', 'AllDirectories') | Sort-Object)
-            if (-not $files.Count) { Write-Host "還沒有 snippet，用 sn new <名稱> 建立第一個（資料夾：$dir）"; return }
-            $query = (@($args) -join ' ').Trim()
+            if (-not $files.Count) { Write-Host "還沒有 snippet，用 sn new <名稱> 建立第一個（資料夾：$dir；sn help 看全部指令）"; return }
+            $query = ((@($Command) + @($Rest)) -join ' ').Trim()
         }
     }
 
@@ -151,5 +172,30 @@ desc:
             Set-Clipboard -Value (Read-SnFile $path).Code
             Write-Host "已複製 $(Get-SnName $path $dir)" -ForegroundColor DarkGray
         }
+    }
+}
+
+# Tab 補全：第一個字補子指令（附說明），sn new 後面補既有名稱與資料夾。
+# 只註冊 scriptblock，按 Tab 時才執行，不影響載入速度。
+Register-ArgumentCompleter -CommandName sn -ParameterName Command -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete)
+    foreach ($k in $SnCommands.Keys) {
+        if ($k -like "$wordToComplete*") {
+            New-Object Management.Automation.CompletionResult $k, $k, 'ParameterValue', $SnCommands[$k]
+        }
+    }
+}
+Register-ArgumentCompleter -CommandName sn -ParameterName Rest -ScriptBlock {
+    param($commandName, $parameterName, $wordToComplete, $commandAst, $fakeBoundParameters)
+    if ($fakeBoundParameters['Command'] -ne 'new') { return }
+    $dir = Get-SnDir
+    $names = foreach ($f in [IO.Directory]::GetFiles($dir, '*.md', 'AllDirectories')) { Get-SnName $f $dir }
+    $folders = foreach ($d in [IO.Directory]::GetDirectories($dir, '*', 'AllDirectories')) { (Get-SnName $d $dir) + '/' }
+    $prefix = $wordToComplete.Replace('\', '/')
+    $hits = @(@($folders) + @($names) | Sort-Object | Where-Object { $_ -like "$prefix*" })
+    foreach ($n in $hits) { New-Object Management.Automation.CompletionResult $n, $n, 'ParameterValue', $n }
+    # 沒有結果時 PowerShell 會改補目前目錄的檔名，那些都不是 snippet 名稱；原樣回傳以擋掉。
+    if (-not $hits.Count -and $wordToComplete) {
+        New-Object Management.Automation.CompletionResult $wordToComplete, $wordToComplete, 'ParameterValue', '新名稱'
     }
 }

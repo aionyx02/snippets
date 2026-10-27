@@ -28,7 +28,10 @@ sn git rebase         # 帶關鍵字開啟；只有一筆符合時直接複製
 sn grep 'HEAD~\d'     # 全文搜尋內容（regex，不分大小寫），再從符合的檔案中挑
 sn new git/squash     # 建立並編輯；已存在就直接編輯
 cd (sn dir)           # 到資料夾
+sn help               # 忘了指令時看這個
 ```
+
+子指令與 `sn new` 後面的既有名稱、資料夾都能按 `Tab` 補全；`Ctrl+Space` 會列出全部選項並附上說明。
 
 挑選畫面：
 
